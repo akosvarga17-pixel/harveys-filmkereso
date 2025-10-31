@@ -1,156 +1,157 @@
 "use strict";
-// 🎬 OMDb + TMDb alapú filmkereső
-// OMDb API beállítások
-const omdbApiKey = "1ad58397"; // <-- ezt majd beilleszted
-const omdbBaseUrl = "https://www.omdbapi.com/";
-// TMDb API beállítások
-const tmdbApiKey = "a68a9c3681d298279ace726e1ff815d3";
-const tmdbBaseUrl = "https://api.themoviedb.org/3";
-// HTML elemek
 const searchInput = document.getElementById("titleInput");
 const yearInput = document.getElementById("yearInput");
 const minRatingInput = document.getElementById("minRatingInput");
 const searchButton = document.getElementById("searchBtn");
 const resultsDiv = document.getElementById("results");
 const paginationDiv = document.getElementById("pagination");
-// 🔍 Keresés indítása
+// 🔑 Saját API kulcsok
+const OMDB_API_KEY = "1ad58397";
+const TMDB_API_KEY = "a68a9c3681d298279ace726e1ff815d3";
+let currentPage = 1;
+let currentSearch = "";
+let currentYear = "";
+let currentMinRating = "";
 searchButton.addEventListener("click", () => {
-    fetchMovies(1);
+    currentSearch = searchInput.value.trim();
+    currentYear = yearInput.value.trim();
+    currentMinRating = minRatingInput.value.trim();
+    currentPage = 1;
+    fetchMovies(currentPage);
 });
-// OMDb filmkeresés
 async function fetchMovies(page = 1) {
-    const title = searchInput.value.trim();
-    const year = yearInput.value.trim();
-    if (!title)
-        return alert("Adj meg egy filmcímet!");
-    resultsDiv.innerHTML = "<p>Keresés folyamatban...</p>";
-    paginationDiv.innerHTML = "";
+    if (!currentSearch) {
+        resultsDiv.innerHTML = `<p>Please enter a movie title to search.</p>`;
+        return;
+    }
+    const omdbUrl = `https://www.omdbapi.com/?apikey=${OMDB_API_KEY}&s=${encodeURIComponent(currentSearch)}&type=movie&page=${page}${currentYear ? `&y=${currentYear}` : ""}`;
     try {
-        const url = `${omdbBaseUrl}?apikey=${omdbApiKey}&s=${encodeURIComponent(title)}&type=movie&page=${page}${year ? `&y=${year}` : ""}`;
-        const response = await fetch(url);
+        const response = await fetch(omdbUrl);
         const data = await response.json();
         if (data.Response === "False") {
-            resultsDiv.innerHTML = "<p>Nincs találat.</p>";
+            resultsDiv.innerHTML = `<p>No results found for your search.</p>`;
+            paginationDiv.innerHTML = "";
             return;
         }
-        const moviesWithDetails = await Promise.all(data.Search.map(async (movie) => {
-            const detailsRes = await fetch(`${omdbBaseUrl}?apikey=${omdbApiKey}&i=${movie.imdbID}&plot=full`);
-            const detailsData = await detailsRes.json();
-            return detailsData;
+        const detailedMovies = await Promise.all(data.Search.map(async (movie) => {
+            const detailsResponse = await fetch(`https://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${movie.imdbID}&plot=full`);
+            return await detailsResponse.json();
         }));
-        displayResults(moviesWithDetails, page, data.totalResults);
+        const withFullData = await Promise.all(detailedMovies.map(async (movie) => {
+            try {
+                const tmdbFind = await fetch(`https://api.themoviedb.org/3/find/${movie.imdbID}?api_key=${TMDB_API_KEY}&external_source=imdb_id`);
+                const tmdbFindData = await tmdbFind.json();
+                const tmdbMovie = tmdbFindData.movie_results?.[0];
+                if (tmdbMovie) {
+                    const tmdbDetails = await fetch(`https://api.themoviedb.org/3/movie/${tmdbMovie.id}?api_key=${TMDB_API_KEY}&append_to_response=credits,reviews`);
+                    const tmdbFull = await tmdbDetails.json();
+                    const director = tmdbFull.credits?.crew?.find((p) => p.job === "Director")?.name || "N/A";
+                    const cast = tmdbFull.credits?.cast
+                        ?.slice(0, 3)
+                        .map((a) => a.name)
+                        .join(", ") || "N/A";
+                    const criticReview = tmdbFull.reviews?.results?.[0]?.content ||
+                        "No critic reviews available.";
+                    movie.director = director;
+                    movie.cast = cast;
+                    movie.audience_vote = tmdbFull.vote_average || "N/A";
+                    movie.critic_review = criticReview;
+                    movie.tmdb_overview = tmdbFull.overview || movie.Plot;
+                }
+                else {
+                    movie.director = "N/A";
+                    movie.cast = "N/A";
+                    movie.audience_vote = "N/A";
+                    movie.critic_review = "No critic reviews available.";
+                    movie.tmdb_overview = movie.Plot;
+                }
+            }
+            catch {
+                movie.director = "N/A";
+                movie.cast = "N/A";
+                movie.audience_vote = "N/A";
+                movie.critic_review = "Error loading critic data.";
+                movie.tmdb_overview = movie.Plot;
+            }
+            movie.rotten_score =
+                movie.Ratings?.find((r) => r.Source === "Rotten Tomatoes")?.Value || "N/A";
+            return movie;
+        }));
+        const filteredMovies = withFullData.filter((m) => {
+            const imdbRating = parseFloat(m.imdbRating);
+            return !currentMinRating || imdbRating >= parseFloat(currentMinRating);
+        });
+        // ✅ IMDb szavazatszám szerinti rendezés
+        filteredMovies.sort((a, b) => {
+            const votesA = parseInt(a.imdbVotes?.replace(/,/g, "") || "0");
+            const votesB = parseInt(b.imdbVotes?.replace(/,/g, "") || "0");
+            return votesB - votesA;
+        });
+        displayMovies(filteredMovies, page, data.totalResults);
     }
     catch (error) {
-        console.error("Hiba az OMDb-lekérésnél:", error);
-        resultsDiv.innerHTML = "<p>Hiba történt a lekérés során.</p>";
+        console.error("Error fetching data:", error);
+        resultsDiv.innerHTML = `<p>Error loading movie data.</p>`;
     }
 }
-// 🎨 Eredmények megjelenítése
-function displayResults(movies, page, totalResults) {
+function displayMovies(movies, page, totalResults) {
     resultsDiv.innerHTML = "";
-    movies.forEach((movie) => {
-        const card = document.createElement("div");
-        card.classList.add("movie-card");
-        card.innerHTML = `
-      <div class="movie-info">
-        <img src="${movie.Poster !== "N/A"
+    movies.slice(0, 10).forEach((movie) => {
+        const poster = movie.Poster !== "N/A"
             ? movie.Poster
-            : "https://via.placeholder.com/300x450?text=Nincs+poszter"}" alt="${movie.Title}" />
-        <div class="movie-text">
-          <h3>${movie.Title}</h3>
-          <p>📅 ${movie.Year}</p>
-          <p>⭐ IMDb: ${movie.imdbRating}</p>
-          <p>🎞️ ${movie.Type}</p>
-          <p class="plot">${movie.Plot || "Nincs leírás elérhető."}</p>
-          <button class="details-btn">Részletek</button>
-          <div class="details hidden"></div>
+            : "https://via.placeholder.com/150x225?text=No+image";
+        const detailId = `details-${movie.imdbID}`;
+        const detailSection = `
+      <div class="extra-info" id="${detailId}" style="display:none;">
+        <p><strong>Rendező:</strong> ${movie.director}</p>
+        <p><strong>Szereplők:</strong> ${movie.cast}</p>
+        <p><strong>IMDb:</strong> ⭐ ${movie.imdbRating}</p>
+        <p><strong>Rotten Tomatoes:</strong> 🍅 ${movie.rotten_score}</p>
+        <p><strong>TMDb átlagos pontszám:</strong> ${movie.audience_vote}/10</p>
+        <p><strong>Kritika:</strong><br>${movie.critic_review}</p>
+        <p>${movie.tmdb_overview}</p>
+      </div>
+      <button class="toggle-btn" onclick="toggleDetails('${detailId}', this)">More details</button>
+    `;
+        const card = document.createElement("div");
+        card.className = "movie-card";
+        card.innerHTML = `
+      <img src="${poster}" alt="${movie.Title}" />
+      <div class="movie-text">
+        <h3>${movie.Title}</h3>
+        <p>${movie.Plot}</p>
+        <div class="details">
+          <p>Type: ${movie.Type}</p>
+          <p>Year: ${movie.Year}</p>
+          <p>IMDb rating: ⭐ ${movie.imdbRating}</p>
+          <p>Votes: ${movie.imdbVotes || "N/A"}</p>
         </div>
+        ${detailSection}
       </div>
     `;
-        // Részletek gomb esemény
-        const detailsBtn = card.querySelector(".details-btn");
-        const detailsDiv = card.querySelector(".details");
-        detailsBtn.addEventListener("click", async () => {
-            if (!detailsDiv.classList.contains("hidden")) {
-                detailsDiv.classList.add("hidden");
-                detailsDiv.innerHTML = "";
-                detailsBtn.textContent = "Részletek";
-                return;
-            }
-            detailsBtn.textContent = "Betöltés...";
-            try {
-                // OMDb részletek
-                const detailsRes = await fetch(`${omdbBaseUrl}?apikey=${omdbApiKey}&i=${movie.imdbID}&plot=full`);
-                const detailsData = await detailsRes.json();
-                // Rotten Tomatoes pont
-                let rottenCritics = "N/A";
-                if (detailsData.Ratings && Array.isArray(detailsData.Ratings)) {
-                    const rtCritic = detailsData.Ratings.find((r) => r.Source === "Rotten Tomatoes");
-                    if (rtCritic)
-                        rottenCritics = rtCritic.Value;
-                }
-                // TMDb extra adatok
-                const tmdbExtras = await fetchTmdbExtras(movie.Title);
-                detailsDiv.innerHTML = `
-          <p><strong>Cím:</strong> ${detailsData.Title}</p>
-          <p><strong>Rendező:</strong> ${detailsData.Director}</p>
-          <p><strong>Szereplők:</strong> ${detailsData.Actors}</p>
-          <p><strong>IMDb:</strong> ${detailsData.imdbRating}</p>
-          <p><strong>Rotten Tomatoes:</strong> ${rottenCritics}</p>
-          ${tmdbExtras
-                    ? `<p><strong>TMDb átlagos pontszám:</strong> ⭐ ${tmdbExtras.avgScore}/10</p>
-                 <p><em>${tmdbExtras.criticTeaser}</em></p>`
-                    : ""}
-          <p>${detailsData.Plot}</p>
-        `;
-                detailsDiv.classList.remove("hidden");
-                detailsBtn.textContent = "Bezárás";
-            }
-            catch (err) {
-                console.error("Hiba a részletes adatnál:", err);
-                detailsDiv.innerHTML = "<p>Nem sikerült lekérni a részletes adatokat.</p>";
-            }
-        });
         resultsDiv.appendChild(card);
     });
-    // Lapozás
-    const totalPages = Math.ceil(totalResults / 10);
     paginationDiv.innerHTML = "";
-    if (page > 1) {
+    const totalPages = Math.ceil(totalResults / 10);
+    if (totalPages > 1) {
         const prevBtn = document.createElement("button");
-        prevBtn.textContent = "⬅️ Előző oldal";
-        prevBtn.addEventListener("click", () => fetchMovies(page - 1));
-        paginationDiv.appendChild(prevBtn);
-    }
-    if (page < totalPages) {
+        prevBtn.textContent = "Previous";
+        prevBtn.disabled = page === 1;
+        prevBtn.onclick = () => fetchMovies(page - 1);
         const nextBtn = document.createElement("button");
-        nextBtn.textContent = "Következő oldal ➡️";
-        nextBtn.addEventListener("click", () => fetchMovies(page + 1));
+        nextBtn.textContent = "Next";
+        nextBtn.disabled = page === totalPages;
+        nextBtn.onclick = () => fetchMovies(page + 1);
+        paginationDiv.appendChild(prevBtn);
         paginationDiv.appendChild(nextBtn);
     }
 }
-// 🧩 TMDb kiegészítő adatok
-async function fetchTmdbExtras(title) {
-    try {
-        const searchRes = await fetch(`${tmdbBaseUrl}/search/movie?api_key=${tmdbApiKey}&query=${encodeURIComponent(title)}`);
-        const searchData = await searchRes.json();
-        if (!searchData.results || searchData.results.length === 0)
-            return null;
-        const movieId = searchData.results[0].id;
-        const detailsRes = await fetch(`${tmdbBaseUrl}/movie/${movieId}?api_key=${tmdbApiKey}`);
-        const detailsData = await detailsRes.json();
-        const reviewsRes = await fetch(`${tmdbBaseUrl}/movie/${movieId}/reviews?api_key=${tmdbApiKey}`);
-        const reviewsData = await reviewsRes.json();
-        const criticTeaser = reviewsData.results && reviewsData.results.length > 0
-            ? reviewsData.results[0].content
-            : "Nincs elérhető kritikai idézet.";
-        return {
-            avgScore: Math.round(detailsData.vote_average * 10) / 10,
-            criticTeaser,
-        };
+// ✅ Lenyitás / visszazárás
+window.toggleDetails = function (id, button) {
+    const section = document.getElementById(id);
+    if (section) {
+        const isHidden = section.style.display === "none";
+        section.style.display = isHidden ? "block" : "none";
+        button.textContent = isHidden ? "Less details" : "More details";
     }
-    catch (error) {
-        console.error("TMDb hiba:", error);
-        return null;
-    }
-}
+};
