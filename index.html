@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Harvey’s Filmkereső</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="logo-container">
+      <img src="./logo.png" alt="Harvey’s logo" class="logo" />
+      <h1>Harvey’s Filmkereső</h1>
+    </div>
+
+    <div class="search-bar">
+      <input type="text" id="titleInput" placeholder="Film címe..." />
+      <input type="number" id="yearInput" placeholder="Év (pl. 2010)" />
+      <input type="number" id="minRatingInput" step="0.1" placeholder="IMDb min. (pl. 7.5)" />
+      <button id="searchBtn">Keresés</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="results"></div>
+    <div id="pagination" class="pagination"></div>
+  </main>
+
+  <footer>
+    <p>© 2025 Harvey’s Consultancy Services Hungary Zrt. — Filmkereső projekt</p>
+  </footer>
+
+  <script src="./script.js"></script>
+</body>
+</html>
